@@ -66,26 +66,28 @@ module Capistrano
         end
 
         def self.put_object(s3, bucket, path, file, extra_options)
-          options = {
+          base_name = File.basename(file)
+          mime_type = mime_type_for_file(base_name)
+          options   = {
             :bucket_name => bucket,
-            :key => path,
-            :data => open(file),
-            :acl => :public_read,
+            :key         => path,
+            :data        => open(file),
+            :acl         => :public_read,
           }
 
-          options.merge!(self.build_content_type_hash(file))
-          options.merge!(self.build_redirect_hash(path, extra_options[:redirect]))
-          options.merge!(self.set_content_encoding_for_gzip(file))
-          options.merge!(extra_options[:write]) if extra_options[:write]
+          options.merge!(build_redirect_hash(path, extra_options[:redirect]))
+          options.merge!(extra_options[:write] || {})
+
+          if mime_type
+            options.merge!(build_content_type_hash(mime_type))
+
+            if mime_type.sub_type == "gzip"
+              options.merge!(build_gzip_content_encoding_hash)
+              options.merge!(build_gzip_content_type_hash(file, mime_type))
+            end
+          end
 
           s3.put_object(options)
-        end
-
-        def self.build_content_type_hash(file)
-          type = MIME::Types.type_for(File.basename(file))
-          return {} unless type && !type.empty?
-
-          { :content_type => type.first.content_type }
         end
 
         def self.build_redirect_hash(path, redirect_options)
@@ -94,14 +96,26 @@ module Capistrano
           { :website_redirect_location => redirect_options[path] }
         end
 
-        def self.set_content_encoding_for_gzip(file)
-          type = MIME::Types.type_for(File.basename(file))
-          if type && !type.empty?
-            if type.first.sub_type == "gzip"
-              return { :content_encoding => "gzip" } if File.exist? file.gsub /\.gz$/, ""
-            end
-          end
-          {}
+        def self.build_content_type_hash(mime_type)
+          { :content_type => mime_type.content_type }
+        end
+
+        def self.build_gzip_content_encoding_hash
+          { :content_encoding => "gzip" }
+        end
+
+        def self.build_gzip_content_type_hash(file, mime_type)
+          orig_name = file.sub(/\.gz$/, "")
+          orig_mime = mime_type_for_file(orig_name)
+
+          return {} unless orig_mime && File.exist?(orig_name)
+
+          { :content_type => orig_mime.content_type }
+        end
+
+        def self.mime_type_for_file(file)
+          type = MIME::Types.type_for(file)
+          (type && !type.empty?) ? type[0] : nil
         end
     end
   end
